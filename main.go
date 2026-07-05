@@ -43,7 +43,6 @@ func main() {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Wait for exporters to become available
 	time.Sleep(10 * time.Second)
 
 	for {
@@ -60,9 +59,10 @@ func main() {
 	}
 }
 
-// filterCadvisorMetrics keeps only the metric families we need from cadvisor
-// and drops metrics without a "name" label (non-container aggregate metrics
-// that cause inconsistent label set errors in pushgateway).
+// filterCadvisorMetrics keeps only the metric families we need from cadvisor,
+// drops metrics without a "name" label, and strips timestamps.
+// Pushgateway rejects metrics with timestamps — it assigns its own timestamp
+// on receive, which is effectively the same as the scrape time (~ms difference).
 func filterCadvisorMetrics(body []byte) []byte {
 	var out bytes.Buffer
 	scanner := bufio.NewScanner(bytes.NewReader(body))
@@ -71,7 +71,6 @@ func filterCadvisorMetrics(body []byte) []byte {
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Keep comment lines for matching metric families
 		if strings.HasPrefix(line, "#") {
 			for _, prefix := range cadvisorMetricPrefixes {
 				if strings.Contains(line, prefix) {
@@ -83,11 +82,10 @@ func filterCadvisorMetrics(body []byte) []byte {
 			continue
 		}
 
-		// Keep metric lines that match our prefixes AND have a name label
 		for _, prefix := range cadvisorMetricPrefixes {
 			if strings.HasPrefix(line, prefix+"{") || strings.HasPrefix(line, prefix+" ") {
 				if strings.Contains(line, `name="`) && !strings.Contains(line, `name=""`) {
-					out.WriteString(line)
+					out.WriteString(stripTimestamp(line))
 					out.WriteByte('\n')
 				}
 				break
@@ -98,8 +96,20 @@ func filterCadvisorMetrics(body []byte) []byte {
 	return out.Bytes()
 }
 
+// stripTimestamp removes trailing timestamp from a Prometheus metric line.
+// "metric{labels} value timestamp" -> "metric{labels} value"
+func stripTimestamp(line string) string {
+	lastSpace := strings.LastIndex(line, " ")
+	if lastSpace > 0 {
+		potential := line[lastSpace+1:]
+		if _, err := strconv.ParseInt(potential, 10, 64); err == nil {
+			return line[:lastSpace]
+		}
+	}
+	return line
+}
+
 func scrapeAndPush(client *http.Client, sourceURL, pushgatewayBase, job, instance string, filter func([]byte) []byte) {
-	// Scrape metrics from exporter
 	resp, err := client.Get(sourceURL)
 	if err != nil {
 		log.Printf("ERROR: failed to scrape %s: %v", sourceURL, err)
@@ -116,7 +126,6 @@ func scrapeAndPush(client *http.Client, sourceURL, pushgatewayBase, job, instanc
 		return
 	}
 
-	// Apply optional filter
 	if filter != nil {
 		body = filter(body)
 	}
@@ -126,7 +135,6 @@ func scrapeAndPush(client *http.Client, sourceURL, pushgatewayBase, job, instanc
 		return
 	}
 
-	// Push metrics to pushgateway via PUT
 	pushURL := fmt.Sprintf("%s/metrics/job/%s/instance/%s", pushgatewayBase, job, instance)
 	req, err := http.NewRequest(http.MethodPut, pushURL, bytes.NewReader(body))
 	if err != nil {
