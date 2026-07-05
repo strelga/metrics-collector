@@ -1,0 +1,5 @@
+metrics-collector
+*.exe
+*.test
+*.out
+vendor/
