@@ -84,7 +84,9 @@ func scrapeAndPush(client *http.Client, sourceURL, pushgatewayBase, job, instanc
 	pushResp.Body.Close()
 
 	if pushResp.StatusCode/100 != 2 {
-		log.Printf("ERROR: pushgateway returned status %d for %s", pushResp.StatusCode, job)
+		respBody, _ := io.ReadAll(pushResp.Body)
+		pushResp.Body.Close()
+		log.Printf("ERROR: pushgateway returned status %d for %s: %s", pushResp.StatusCode, job, string(respBody))
 		return
 	}
 
